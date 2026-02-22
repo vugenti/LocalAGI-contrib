@@ -760,13 +760,16 @@ func (t *Slack) handleMention(
 
 		// get user id
 		user, err := api.GetUserInfo(ev.User)
+		displayName := ev.User
 		if err != nil {
 			xlog.Error(fmt.Sprintf("Error getting user info: %v", err))
+		} else if user != nil {
+			displayName = user.Name
 		}
 
 		// Format the final response (convert GitHub markdown to Slack mrkdwn)
 		convertedResponse := githubmarkdownconvertergo.Slack(res.Response)
-		finalResponse := fmt.Sprintf("@%s %s", user.Name, convertedResponse)
+		finalResponse := fmt.Sprintf("@%s %s", displayName, convertedResponse)
 		xlog.Debug("Send final response to slack", "response", finalResponse)
 
 		replyToUpdateMessage(finalResponse, api, ev, msgTs, ts, postMessageParams, res)
