@@ -152,7 +152,17 @@ func NewAgentPool(
 
 	poolData, err := loadPoolFromFile(poolfile)
 	if err != nil {
-		return nil, err
+		bakPath := poolfile + ".bak"
+		poolData, err = loadPoolFromFile(bakPath)
+		if err != nil {
+			xlog.Warn("Pool file invalid and backup missing or invalid, starting with empty pool", "poolfile", poolfile, "error", err)
+			poolData = &AgentPoolData{}
+		} else {
+			xlog.Info("Recovered pool from backup, repairing main file", "poolfile", poolfile)
+			if repairData, _ := json.MarshalIndent(poolData, "", "  "); len(repairData) > 0 {
+				_ = os.WriteFile(poolfile, repairData, 0644)
+			}
+		}
 	}
 	return &AgentPool{
 		file:                         poolfile,
@@ -208,21 +218,21 @@ func (a *AgentPool) RecreateAgent(name string, agentConfig *AgentConfig) error {
 
 	oldAgent := a.agents[name]
 	var o *types.Observable
-	obs := oldAgent.Observer()
-	if obs != nil {
-		o = obs.NewObservable()
-		o.Name = "Restarting Agent"
-		o.Icon = "sync"
-		o.Creation = &types.Creation{}
-		obs.Update(*o)
+	var obs Observer
+	if oldAgent != nil {
+		obs = oldAgent.Observer()
+		if obs != nil {
+			o = obs.NewObservable()
+			o.Name = "Restarting Agent"
+			o.Icon = "sync"
+			o.Creation = &types.Creation{}
+			obs.Update(*o)
+		}
+		stateFile, characterFile := a.stateFiles(name)
+		os.Remove(stateFile)
+		os.Remove(characterFile)
+		oldAgent.Stop()
 	}
-
-	stateFile, characterFile := a.stateFiles(name)
-
-	os.Remove(stateFile)
-	os.Remove(characterFile)
-
-	oldAgent.Stop()
 
 	a.pool[name] = *agentConfig
 	delete(a.agents, name)
@@ -715,7 +725,21 @@ func (a *AgentPool) save() error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(a.file, data, 0644)
+	tmpPath := a.file + ".tmp"
+	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+	if err := os.Rename(tmpPath, a.file); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+	bakPath := a.file + ".bak"
+	if err := os.WriteFile(bakPath, data, 0644); err != nil {
+		// best-effort; main file is already good
+		xlog.Warn("Failed to write pool backup", "path", bakPath, "error", err)
+	}
+	return nil
 }
 
 func (a *AgentPool) GetAgent(name string) *Agent {
