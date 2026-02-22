@@ -77,7 +77,6 @@ func (t *Slack) AgentResultCallback() func(state types.ActionState) {
 					acc.AppendToolResult(common.ActionDisplayName(state.Action), state.Result)
 					thought := acc.BuildMessage(thinkingMessage, 3000)
 					t.placeholderMutex.Unlock()
-					t.placeholderMutex.Unlock()
 					_, _, _, err := t.apiClient.UpdateMessage(
 						channel,
 						msgTs,
