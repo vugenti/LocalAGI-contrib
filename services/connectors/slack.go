@@ -154,65 +154,46 @@ func replaceUserIDsWithNamesInMessage(api *slack.Client, message string) string 
 	return message
 }
 
-func generateAttachmentsFromJobResponse(j *types.JobResult, api *slack.Client, channelID, ts string) (attachments []slack.Attachment) {
-	for _, state := range j.State {
-		// coming from the browser agent
-		// if history, exists := state.Metadata[actions.MetadataBrowserAgentHistory]; exists {
-		// 	if historyStruct, ok := history.(*localoperator.StateHistory); ok {
-		// 		state := historyStruct.States[len(historyStruct.States)-1]
-		// 		// Decode base64 screenshot and upload to Slack
-		// 		if state.Screenshot != "" {
-		// 			screenshotData, err := base64.StdEncoding.DecodeString(state.Screenshot)
-		// 			if err != nil {
-		// 				xlog.Error(fmt.Sprintf("Error decoding screenshot: %v", err))
-		// 				continue
-		// 			}
-
-		// 			data := string(screenshotData)
-		// 			// Upload the file to Slack
-		// 			_, err = api.UploadFileV2(slack.UploadFileV2Parameters{
-		// 				Reader:          bytes.NewReader(screenshotData),
-		// 				FileSize:        len(data),
-		// 				ThreadTimestamp: ts,
-		// 				Channel:         channelID,
-		// 				Filename:        "screenshot.png",
-		// 				InitialComment:  "Browser Agent Screenshot",
-		// 			})
-		// 			if err != nil {
-		// 				xlog.Error(fmt.Sprintf("Error uploading screenshot: %v", err))
-		// 				continue
-		// 			}
-		// 		}
-		// 	}
-		// }
-
-		// coming from the search action
-		if urls, exists := state.Metadata[actions.MetadataUrls]; exists {
-			for _, url := range xstrings.UniqueSlice(urls.([]string)) {
-				attachment := slack.Attachment{
+// attachmentsFromMetadataOnly returns link/image attachments from metadata (no file uploads).
+// Used when posting a message so we can include URLs/images in the same post.
+func attachmentsFromMetadataOnly(metadata map[string]interface{}) (attachments []slack.Attachment) {
+	if metadata == nil {
+		return nil
+	}
+	if urls, exists := metadata[actions.MetadataUrls]; exists {
+		if sl, ok := urls.([]string); ok {
+			for _, url := range xstrings.UniqueSlice(sl) {
+				attachments = append(attachments, slack.Attachment{
 					Title:     "URL",
 					TitleLink: url,
 					Text:      url,
-				}
-				attachments = append(attachments, attachment)
+				})
 			}
 		}
-
-		// coming from the gen image actions
-		if imagesUrls, exists := state.Metadata[actions.MetadataImages]; exists {
-			for _, url := range xstrings.UniqueSlice(imagesUrls.([]string)) {
-				attachment := slack.Attachment{
+	}
+	if imagesUrls, exists := metadata[actions.MetadataImages]; exists {
+		if sl, ok := imagesUrls.([]string); ok {
+			for _, url := range xstrings.UniqueSlice(sl) {
+				attachments = append(attachments, slack.Attachment{
 					Title:     "Image",
 					TitleLink: url,
 					ImageURL:  url,
-				}
-				attachments = append(attachments, attachment)
+				})
 			}
 		}
+	}
+	return attachments
+}
 
-		// coming from the generate_song action (local file paths)
-		if songPaths, exists := state.Metadata[actions.MetadataSongs]; exists {
-			for _, path := range xstrings.UniqueSlice(songPaths.([]string)) {
+// uploadFilesFromMetadata uploads song and PDF files from metadata to the given thread.
+// Call after posting a message so threadTs is the message timestamp.
+func uploadFilesFromMetadata(metadata map[string]interface{}, api *slack.Client, channelID, threadTs string) {
+	if metadata == nil {
+		return
+	}
+	if songPaths, exists := metadata[actions.MetadataSongs]; exists {
+		if sl, ok := songPaths.([]string); ok {
+			for _, path := range xstrings.UniqueSlice(sl) {
 				data, err := os.ReadFile(path)
 				if err != nil {
 					xlog.Error(fmt.Sprintf("Error reading song file %s: %v", path, err))
@@ -222,23 +203,20 @@ func generateAttachmentsFromJobResponse(j *types.JobResult, api *slack.Client, c
 				if filename == "" || filename == "." {
 					filename = "audio"
 				}
-				_, err = api.UploadFileV2(slack.UploadFileV2Parameters{
+				_, _ = api.UploadFileV2(slack.UploadFileV2Parameters{
 					Reader:          bytes.NewReader(data),
 					FileSize:        len(data),
-					ThreadTimestamp: ts,
+					ThreadTimestamp: threadTs,
 					Channel:         channelID,
 					Filename:        filename,
 					InitialComment:  "Generated song",
 				})
-				if err != nil {
-					xlog.Error(fmt.Sprintf("Error uploading song to Slack: %v", err))
-				}
 			}
 		}
-
-		// coming from the generate_pdf action (local file paths)
-		if pdfPaths, exists := state.Metadata[actions.MetadataPDFs]; exists {
-			for _, path := range xstrings.UniqueSlice(pdfPaths.([]string)) {
+	}
+	if pdfPaths, exists := metadata[actions.MetadataPDFs]; exists {
+		if sl, ok := pdfPaths.([]string); ok {
+			for _, path := range xstrings.UniqueSlice(sl) {
 				data, err := os.ReadFile(path)
 				if err != nil {
 					xlog.Error(fmt.Sprintf("Error reading PDF file %s: %v", path, err))
@@ -248,22 +226,33 @@ func generateAttachmentsFromJobResponse(j *types.JobResult, api *slack.Client, c
 				if filename == "" || filename == "." {
 					filename = "document.pdf"
 				}
-
-				_, err = api.UploadFileV2(slack.UploadFileV2Parameters{
+				_, _ = api.UploadFileV2(slack.UploadFileV2Parameters{
 					Reader:          bytes.NewReader(data),
 					FileSize:        len(data),
-					ThreadTimestamp: ts,
+					ThreadTimestamp: threadTs,
 					Channel:         channelID,
 					Filename:        filename,
 					InitialComment:  "Generated PDF document",
 				})
-				if err != nil {
-					xlog.Error(fmt.Sprintf("Error uploading PDF to Slack: %v", err))
-				}
 			}
 		}
 	}
-	return
+}
+
+// attachmentsAndUploadsFromMetadata returns link/image attachments and uploads files (songs, PDFs)
+// from a metadata map. Used both by JobResult.State and by ConversationMessage.Metadata
+// (e.g. when newconversation/send_message is used so metadata is passed without going through State).
+func attachmentsAndUploadsFromMetadata(metadata map[string]interface{}, api *slack.Client, channelID, threadTs string) (attachments []slack.Attachment) {
+	attachments = attachmentsFromMetadataOnly(metadata)
+	uploadFilesFromMetadata(metadata, api, channelID, threadTs)
+	return attachments
+}
+
+func generateAttachmentsFromJobResponse(j *types.JobResult, api *slack.Client, channelID, ts string) (attachments []slack.Attachment) {
+	for _, state := range j.State {
+		attachments = append(attachments, attachmentsAndUploadsFromMetadata(state.Metadata, api, channelID, ts)...)
+	}
+	return attachments
 }
 
 // ImageData represents a single image with its metadata
@@ -797,18 +786,24 @@ func (t *Slack) Start(a *agent.Agent) {
 
 	if t.channelID != "" {
 		xlog.Debug(fmt.Sprintf("Listening for messages in channel %s", t.channelID))
-		// handle new conversations
+		// handle new conversations (e.g. send_message / newconversation action)
+		// Preserve metadata (PDFs, songs, images, URLs) so attachments are not lost
 		a.AddSubscriber(func(ccm *types.ConversationMessage) {
 			xlog.Debug("Subscriber(slack)", "message", ccm.Message.Content)
 			convertedContent := githubmarkdownconvertergo.Slack(ccm.Message.Content)
-			_, _, err := api.PostMessage(t.channelID,
+			attachments := attachmentsFromMetadataOnly(ccm.Metadata)
+			channelID, ts, err := api.PostMessage(t.channelID,
 				slack.MsgOptionLinkNames(true),
 				slack.MsgOptionEnableLinkUnfurl(),
 				slack.MsgOptionText(convertedContent, false),
 				slack.MsgOptionPostMessageParameters(postMessageParams),
+				slack.MsgOptionAttachments(attachments...),
 			)
 			if err != nil {
 				xlog.Error(fmt.Sprintf("Error posting message: %v", err))
+			} else if ccm.Metadata != nil {
+				// Upload files (PDFs, songs) to the same thread so metadata is not lost
+				uploadFilesFromMetadata(ccm.Metadata, api, channelID, ts)
 			}
 			a.SharedState().ConversationTracker.AddMessage(
 				fmt.Sprintf("slack:%s", t.channelID),
