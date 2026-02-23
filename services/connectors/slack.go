@@ -264,6 +264,9 @@ func attachmentsAndUploadsFromMetadata(metadata map[string]interface{}, api *sla
 }
 
 func generateAttachmentsFromJobResponse(j *types.JobResult, api *slack.Client, channelID, ts string) (attachments []slack.Attachment) {
+	if j == nil {
+		return nil
+	}
 	for _, state := range j.State {
 		attachments = append(attachments, attachmentsAndUploadsFromMetadata(state.Metadata, api, channelID, ts)...)
 	}
@@ -750,7 +753,7 @@ func (t *Slack) handleMention(
 			types.WithMetadata(metadata),
 		)
 
-		if res.Response == "" {
+		if res == nil || res.Response == "" {
 			xlog.Debug(fmt.Sprintf("Empty response from agent"))
 			replyToUpdateMessage("there was an internal error. try again!", api, ev, msgTs, ts, postMessageParams, res)
 
