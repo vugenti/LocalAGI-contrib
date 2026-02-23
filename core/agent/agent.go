@@ -922,6 +922,9 @@ func (a *Agent) consumeJob(job *types.Job, role string) {
 
 	var err error
 	var userTool bool
+	// Set by tool callback when it decides the job outcome; Finish is then called once after ExecuteTools.
+	var finishedByCallback bool
+	var finishErr error
 
 	var observables = make(map[string]*types.Observable)
 
@@ -1062,7 +1065,8 @@ func (a *Agent) consumeJob(job *types.Job, role string) {
 					toolArgs, _ := json.Marshal(tc.Arguments)
 					if err := json.Unmarshal([]byte(toolArgs), &message); err != nil {
 						xlog.Error("Error unmarshalling conversation response", "error", err)
-						job.Result.Finish(fmt.Errorf("error unmarshalling conversation response: %w", err))
+						finishedByCallback = true
+						finishErr = fmt.Errorf("error unmarshalling conversation response: %w", err)
 						return cogito.ToolCallDecision{
 							Approved: false,
 						}
@@ -1088,7 +1092,8 @@ func (a *Agent) consumeJob(job *types.Job, role string) {
 						msg,
 					}
 					job.Result.SetResponse("decided to initiate a new conversation")
-					job.Result.Finish(nil)
+					finishedByCallback = true
+					finishErr = nil
 					return cogito.ToolCallDecision{
 						Approved: false,
 					}
@@ -1155,8 +1160,8 @@ func (a *Agent) consumeJob(job *types.Job, role string) {
 						})
 
 					job.Result.Conversation = conv
-					job.Result.Finish(nil)
-
+					finishedByCallback = true
+					finishErr = nil
 				}
 				return cogito.ToolCallDecision{
 					Approved: cont,
@@ -1223,6 +1228,11 @@ func (a *Agent) consumeJob(job *types.Job, role string) {
 		}
 		xlog.Error("Error executing cogito", "error", err)
 		job.Result.Finish(err)
+		return
+	}
+
+	if finishedByCallback {
+		job.Result.Finish(finishErr)
 		return
 	}
 
