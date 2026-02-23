@@ -245,7 +245,7 @@ func (a *Agent) Execute(j *types.Job) *types.JobResult {
 		xlog.Debug("Agent has finished", "agent", a.Character.Name)
 	}()
 
-	if j.Obs != nil {
+	if j.Obs != nil && a.observer != nil {
 		if len(j.ConversationHistory) > 0 {
 			m := j.ConversationHistory[len(j.ConversationHistory)-1]
 			j.Obs.Creation = &types.Creation{ChatCompletionMessage: &m}
@@ -253,14 +253,17 @@ func (a *Agent) Execute(j *types.Job) *types.JobResult {
 		}
 
 		j.Result.AddFinalizer(func(ccm []openai.ChatCompletionMessage) {
-			j.Obs.Completion = &types.Completion{
-				Conversation: ccm,
+			if a.observer == nil {
+				return
 			}
-
+			// Merge into existing Completion so last-progress completion data is preserved
+			if j.Obs.Completion == nil {
+				j.Obs.Completion = &types.Completion{}
+			}
+			j.Obs.Completion.Conversation = ccm
 			if j.Result.Error != nil {
 				j.Obs.Completion.Error = j.Result.Error.Error()
 			}
-
 			a.observer.Update(*j.Obs)
 		})
 	}
@@ -637,7 +640,7 @@ func (a *Agent) filterJob(job *types.Job) (ok bool, err error) {
 		}
 	}
 
-	if a.Observer() != nil {
+	if a.Observer() != nil && job.Obs != nil {
 		obs := a.Observer().NewObservable()
 		obs.Name = "filter"
 		obs.Icon = "shield"
@@ -863,6 +866,28 @@ func (a *Agent) consumeJob(job *types.Job, role string) {
 		}()
 	}
 
+	// Ensure job observable has Creation and Completion for jobs that bypass Execute() (e.g. periodic, scheduler)
+	if job.Obs != nil && a.observer != nil {
+		if job.Obs.Creation == nil && len(job.ConversationHistory) > 0 {
+			m := job.ConversationHistory[len(job.ConversationHistory)-1]
+			job.Obs.Creation = &types.Creation{ChatCompletionMessage: &m}
+			a.observer.Update(*job.Obs)
+		}
+		job.Result.AddFinalizer(func(ccm []openai.ChatCompletionMessage) {
+			if a.observer == nil {
+				return
+			}
+			if job.Obs.Completion == nil {
+				job.Obs.Completion = &types.Completion{}
+			}
+			job.Obs.Completion.Conversation = ccm
+			if job.Result.Error != nil {
+				job.Obs.Completion.Error = job.Result.Error.Error()
+			}
+			a.observer.Update(*job.Obs)
+		})
+	}
+
 	conv = a.processPrompts(job.GetContext(), conv)
 	if ok, err := a.filterJob(job); !ok || err != nil {
 		if err != nil {
@@ -900,18 +925,6 @@ func (a *Agent) consumeJob(job *types.Job, role string) {
 	allActions := append(availableActions, a.mcpActionDefinitions...)
 
 	obs := job.Obs
-	if obs == nil && a.observer != nil && job.Obs != nil {
-		obs = a.observer.NewObservable()
-		obs.Name = "decision"
-		obs.Icon = "brain"
-		obs.ParentID = job.Obs.ID
-		obs.Creation = &types.Creation{
-			ChatCompletionRequest: &openai.ChatCompletionRequest{
-				Model:    a.options.LLMAPI.Model,
-				Messages: conv,
-			},
-		}
-	}
 
 	defer func() {
 		if obs != nil && a.observer != nil {
@@ -970,15 +983,15 @@ func (a *Agent) consumeJob(job *types.Job, role string) {
 			})
 		}),
 		cogito.WithToolCallResultCallback(func(t cogito.ToolStatus) {
-			if a.observer != nil && obs != nil {
-				obs := observables[t.ToolArguments.ID]
-				obs.Progress = append(obs.Progress, types.Progress{
+			toolObs := observables[t.ToolArguments.ID]
+			if a.observer != nil && toolObs != nil {
+				toolObs.Progress = append(toolObs.Progress, types.Progress{
 					ActionResult: t.Result,
 				})
-				obs.Name = "action"
-				obs.Icon = "bolt"
-				obs.MakeLastProgressCompletion()
-				a.observer.Update(*obs)
+				toolObs.Name = "action"
+				toolObs.Icon = "bolt"
+				toolObs.MakeLastProgressCompletion()
+				a.observer.Update(*toolObs)
 			}
 
 			// Use full ActionResult (including Metadata) from action result,
@@ -1102,13 +1115,14 @@ func (a *Agent) consumeJob(job *types.Job, role string) {
 					state := types.AgentInternalState{}
 					dat, _ := json.Marshal(tc.Arguments)
 					err = json.Unmarshal(dat, &state)
+					stateObs := observables[tc.ID]
 					if err != nil {
 						werr := fmt.Errorf("error unmarshalling state of the agent: %w", err)
-						if obs != nil && a.observer != nil {
-							obs.Completion = &types.Completion{
+						if stateObs != nil && a.observer != nil {
+							stateObs.Completion = &types.Completion{
 								Error: werr.Error(),
 							}
-							a.observer.Update(*obs)
+							a.observer.Update(*stateObs)
 						}
 						return cogito.ToolCallDecision{
 							Approved: false,
@@ -1116,27 +1130,32 @@ func (a *Agent) consumeJob(job *types.Job, role string) {
 					}
 					// update the current state with the one we just got from the action
 					a.currentState = &state
-					if obs != nil && a.observer != nil {
-						obs.Progress = append(obs.Progress, types.Progress{
+					if stateObs != nil && a.observer != nil {
+						stateObs.Progress = append(stateObs.Progress, types.Progress{
 							AgentState: &state,
 						})
-						a.observer.Update(*obs)
+						a.observer.Update(*stateObs)
 					}
 
 					// update the state file
 					if a.options.statefile != "" {
 						if err := a.SaveState(a.options.statefile); err != nil {
-							if obs != nil && a.observer != nil {
-								obs.Completion = &types.Completion{
+							if stateObs != nil && a.observer != nil {
+								stateObs.Completion = &types.Completion{
 									Error: err.Error(),
 								}
-								a.observer.Update(*obs)
+								a.observer.Update(*stateObs)
 							}
 
 							return cogito.ToolCallDecision{
 								Approved: false,
 							}
 						}
+					}
+					// Mark state tool-call observable as completed successfully
+					if stateObs != nil && a.observer != nil {
+						stateObs.MakeLastProgressCompletion()
+						a.observer.Update(*stateObs)
 					}
 
 				}
