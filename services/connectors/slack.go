@@ -225,39 +225,55 @@ func stringSliceFromMetadata(v interface{}) []string {
 }
 
 // uploadFilesFromMetadata uploads song and PDF files from metadata to the given thread.
+// Paths must be local filesystem paths; URLs will be skipped with a clear log.
 // Call after posting a message so threadTs is the message timestamp.
 func uploadFilesFromMetadata(metadata map[string]interface{}, api *slack.Client, channelID, threadTs string) {
 	if metadata == nil {
 		return
 	}
+	isURL := func(p string) bool {
+		return strings.HasPrefix(p, "http://") || strings.HasPrefix(p, "https://")
+	}
 	if songPaths, exists := metadata[actions.MetadataSongs]; exists {
 		sl := stringSliceFromMetadata(songPaths)
 		for _, path := range xstrings.UniqueSlice(sl) {
+			if isURL(path) {
+				xlog.Error("Slack upload skipped: song path is a URL, need local path", "path", path)
+				continue
+			}
 			data, err := os.ReadFile(path)
 			if err != nil {
-				xlog.Error(fmt.Sprintf("Error reading song file %s: %v", path, err))
+				xlog.Error("Error reading song file", "path", path, "error", err)
 				continue
 			}
 			filename := filepath.Base(path)
 			if filename == "" || filename == "." {
 				filename = "audio"
 			}
-			_, _ = api.UploadFileV2(slack.UploadFileV2Parameters{
+			_, err = api.UploadFileV2(slack.UploadFileV2Parameters{
 				Reader:          bytes.NewReader(data),
 				FileSize:        len(data),
 				ThreadTimestamp: threadTs,
 				Channel:         channelID,
 				Filename:        filename,
+				Title:           filename,
 				InitialComment:  "Generated song",
 			})
+			if err != nil {
+				xlog.Error("Slack UploadFileV2 failed for song", "error", err, "path", path)
+			}
 		}
 	}
 	if pdfPaths, exists := metadata[actions.MetadataPDFs]; exists {
 		sl := stringSliceFromMetadata(pdfPaths)
 		for _, path := range xstrings.UniqueSlice(sl) {
+			if isURL(path) {
+				xlog.Error("Slack upload skipped: PDF path is a URL, need local path", "path", path)
+				continue
+			}
 			data, err := os.ReadFile(path)
 			if err != nil {
-				xlog.Error(fmt.Sprintf("Error reading PDF file %s: %v", path, err))
+				xlog.Error("Error reading PDF file", "path", path, "error", err)
 				continue
 			}
 			filename := filepath.Base(path)
@@ -271,10 +287,11 @@ func uploadFilesFromMetadata(metadata map[string]interface{}, api *slack.Client,
 				ThreadTimestamp: threadTs,
 				Channel:         channelID,
 				Filename:        filename,
+				Title:           filename,
 				InitialComment:  "Generated PDF document",
 			})
 			if err != nil {
-				xlog.Error("Error uploading PDF to Slack", "error", err, "path", path)
+				xlog.Error("Slack UploadFileV2 failed for PDF", "error", err, "path", path)
 			}
 		}
 	}
@@ -287,6 +304,29 @@ func attachmentsAndUploadsFromMetadata(metadata map[string]interface{}, api *sla
 	attachments = attachmentsFromMetadataOnly(metadata)
 	uploadFilesFromMetadata(metadata, api, channelID, threadTs)
 	return attachments
+}
+
+// attachmentsFromJobResponseOnly returns link/image attachments from job response without uploading files.
+// Use with uploadJobResultFiles so uploads happen once per reply.
+func attachmentsFromJobResponseOnly(j *types.JobResult) []slack.Attachment {
+	if j == nil {
+		return nil
+	}
+	var out []slack.Attachment
+	for _, state := range j.State {
+		out = append(out, attachmentsFromMetadataOnly(state.Metadata)...)
+	}
+	return out
+}
+
+// uploadJobResultFiles uploads all song/PDF files from job result states to the given thread once.
+func uploadJobResultFiles(res *types.JobResult, api *slack.Client, channelID, threadTs string) {
+	if res == nil {
+		return
+	}
+	for _, state := range res.State {
+		uploadFilesFromMetadata(state.Metadata, api, channelID, threadTs)
+	}
 }
 
 func generateAttachmentsFromJobResponse(j *types.JobResult, api *slack.Client, channelID, ts string) (attachments []slack.Attachment) {
@@ -557,42 +597,52 @@ func (t *Slack) handleChannelMessage(
 }
 
 func replyWithPostMessage(finalResponse string, api *slack.Client, ev *slackevents.MessageEvent, postMessageParams slack.PostMessageParameters, res *types.JobResult) {
+	attachments := attachmentsFromJobResponseOnly(res)
 	if len(finalResponse) > 4000 {
-		// split response in multiple messages, and update the first
-
+		// Split response into multiple messages; post first to get thread ts, upload files once, then post rest in thread
 		messages := xstrings.SplitParagraph(finalResponse, 3000)
-
-		for _, message := range messages {
-			_, _, err := api.PostMessage(ev.Channel,
+		var firstTs string
+		for i, message := range messages {
+			opts := []slack.MsgOption{
 				slack.MsgOptionLinkNames(true),
 				slack.MsgOptionEnableLinkUnfurl(),
 				slack.MsgOptionText(message, false),
 				slack.MsgOptionPostMessageParameters(postMessageParams),
-				slack.MsgOptionAttachments(generateAttachmentsFromJobResponse(res, api, ev.Channel, "")...),
-			)
+				slack.MsgOptionAttachments(attachments...),
+			}
+			if i > 0 && firstTs != "" {
+				opts = append(opts, slack.MsgOptionTS(firstTs))
+			}
+			_, ts, err := api.PostMessage(ev.Channel, opts...)
 			if err != nil {
-				xlog.Error(fmt.Sprintf("Error posting message: %v", err))
+				xlog.Error("Error posting message", "error", err)
+				continue
+			}
+			if i == 0 {
+				firstTs = ts
+				uploadJobResultFiles(res, api, ev.Channel, firstTs)
 			}
 		}
 	} else {
-		_, _, err := api.PostMessage(ev.Channel,
+		_, ts, err := api.PostMessage(ev.Channel,
 			slack.MsgOptionLinkNames(true),
 			slack.MsgOptionEnableLinkUnfurl(),
 			slack.MsgOptionText(finalResponse, false),
 			slack.MsgOptionPostMessageParameters(postMessageParams),
-			slack.MsgOptionAttachments(generateAttachmentsFromJobResponse(res, api, ev.Channel, "")...),
-		//	slack.MsgOptionTS(ts),
+			slack.MsgOptionAttachments(attachments...),
 		)
 		if err != nil {
-			xlog.Error(fmt.Sprintf("Error updating final message: %v", err))
+			xlog.Error("Error posting message", "error", err)
+			return
 		}
+		uploadJobResultFiles(res, api, ev.Channel, ts)
 	}
 }
 
 func replyToUpdateMessage(finalResponse string, api *slack.Client, ev *slackevents.AppMentionEvent, msgTs string, ts string, postMessageParams slack.PostMessageParameters, res *types.JobResult) {
+	attachments := attachmentsFromJobResponseOnly(res)
+	uploadJobResultFiles(res, api, ev.Channel, msgTs)
 	if len(finalResponse) > 3000 {
-		// split response in multiple messages, and update the first
-
 		messages := xstrings.SplitParagraph(finalResponse, 3000)
 
 		_, _, _, err := api.UpdateMessage(
@@ -602,10 +652,10 @@ func replyToUpdateMessage(finalResponse string, api *slack.Client, ev *slackeven
 			slack.MsgOptionEnableLinkUnfurl(),
 			slack.MsgOptionText(messages[0], false),
 			slack.MsgOptionPostMessageParameters(postMessageParams),
-			slack.MsgOptionAttachments(generateAttachmentsFromJobResponse(res, api, ev.Channel, msgTs)...),
+			slack.MsgOptionAttachments(attachments...),
 		)
 		if err != nil {
-			xlog.Error(fmt.Sprintf("Error updating final message: %v", err))
+			xlog.Error("Error updating final message", "error", err)
 		}
 
 		for i, message := range messages {
@@ -620,7 +670,7 @@ func replyToUpdateMessage(finalResponse string, api *slack.Client, ev *slackeven
 				slack.MsgOptionTS(ts),
 			)
 			if err != nil {
-				xlog.Error(fmt.Sprintf("Error posting message: %v", err))
+				xlog.Error("Error posting message", "error", err)
 			}
 		}
 	} else {
@@ -631,10 +681,10 @@ func replyToUpdateMessage(finalResponse string, api *slack.Client, ev *slackeven
 			slack.MsgOptionEnableLinkUnfurl(),
 			slack.MsgOptionText(finalResponse, false),
 			slack.MsgOptionPostMessageParameters(postMessageParams),
-			slack.MsgOptionAttachments(generateAttachmentsFromJobResponse(res, api, ev.Channel, msgTs)...),
+			slack.MsgOptionAttachments(attachments...),
 		)
 		if err != nil {
-			xlog.Error(fmt.Sprintf("Error updating final message: %v", err))
+			xlog.Error("Error updating final message", "error", err)
 		}
 	}
 }
