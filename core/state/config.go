@@ -100,6 +100,7 @@ type AgentConfig struct {
 	CanStopItself              bool   `json:"can_stop_itself" form:"can_stop_itself"`
 	SystemPrompt               string `json:"system_prompt" form:"system_prompt"`
 	SkillsPrompt               string `json:"skills_prompt" form:"skills_prompt"`
+	InnerMonologueTemplate     string `json:"inner_monologue_template" form:"inner_monologue_template"`
 	LongTermMemory             bool   `json:"long_term_memory" form:"long_term_memory"`
 	SummaryLongTermMemory      bool   `json:"summary_long_term_memory" form:"summary_long_term_memory"`
 	ConversationStorageMode    string `json:"conversation_storage_mode" form:"conversation_storage_mode"`
@@ -341,6 +342,14 @@ func NewAgentConfigMeta(
 				Type:         "textarea",
 				DefaultValue: "",
 				HelpText:     "Optional instructions for using skills. Used when Enable Skills is on. If empty, default instructions are used.",
+				Tags:         config.Tags{Section: "PromptsGoals"},
+			},
+			{
+				Name:         "inner_monologue_template",
+				Label:        "Inner Monologue Template",
+				Type:         "textarea",
+				DefaultValue: "",
+				HelpText:     "Prompt used for periodic/standalone runs when the agent evaluates what to do next. If empty, the default autonomous agent instructions are used.",
 				Tags:         config.Tags{Section: "PromptsGoals"},
 			},
 			{

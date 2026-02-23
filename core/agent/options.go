@@ -71,7 +71,8 @@ type options struct {
 
 	prompts []DynamicPrompt
 
-	systemPrompt string
+	systemPrompt         string
+	innerMonologueTemplate string
 
 	// callbacks
 	reasoningCallback func(types.ActionCurrentState) bool
@@ -306,6 +307,14 @@ func WithConversationStorageMode(mode ConversationStorageMode) Option {
 func WithSystemPrompt(prompt string) Option {
 	return func(o *options) error {
 		o.systemPrompt = prompt
+		return nil
+	}
+}
+
+// WithInnerMonologueTemplate sets the prompt used for periodic/standalone runs. If empty, the default template is used.
+func WithInnerMonologueTemplate(template string) Option {
+	return func(o *options) error {
+		o.innerMonologueTemplate = template
 		return nil
 	}
 }

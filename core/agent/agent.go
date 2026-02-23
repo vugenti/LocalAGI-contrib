@@ -1297,8 +1297,12 @@ func (a *Agent) periodicallyRun(timer *time.Timer) {
 	// - evaluating the result
 	// - asking the agent to do something else based on the result
 
+	innerMonologue := a.options.innerMonologueTemplate
+	if innerMonologue == "" {
+		innerMonologue = innerMonologueTemplate
+	}
 	whatNext := types.NewJob(
-		types.WithText(innerMonologueTemplate),
+		types.WithText(innerMonologue),
 		types.WithReasoningCallback(a.options.reasoningCallback),
 		types.WithResultCallback(a.options.resultCallback),
 	)

@@ -440,6 +440,7 @@ func (a *AgentPool) startAgentWithConfig(name, pooldir string, config *AgentConf
 			return true
 		}),
 		WithSystemPrompt(config.SystemPrompt),
+		WithInnerMonologueTemplate(config.InnerMonologueTemplate),
 		WithMultimodalModel(multimodalModel),
 		WithLastMessageDuration(config.LastMessageDuration),
 		WithAgentResultCallback(func(state types.ActionState) {
