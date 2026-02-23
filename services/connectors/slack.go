@@ -200,6 +200,30 @@ func attachmentsFromMetadataOnly(metadata map[string]interface{}) (attachments [
 	return attachments
 }
 
+// stringSliceFromMetadata converts a metadata value to []string, supporting both
+// []string and []interface{} (e.g. from JSON). Returns nil if the value is not a supported slice type.
+func stringSliceFromMetadata(v interface{}) []string {
+	if v == nil {
+		return nil
+	}
+
+	switch v := v.(type) {
+	case string:
+		return []string{v}
+	case []string:
+		return v
+	case []interface{}:
+		out := make([]string, 0, len(v))
+		for _, e := range v {
+			if s, ok := e.(string); ok {
+				out = append(out, s)
+			}
+		}
+		return out
+	}
+	return nil
+}
+
 // uploadFilesFromMetadata uploads song and PDF files from metadata to the given thread.
 // Call after posting a message so threadTs is the message timestamp.
 func uploadFilesFromMetadata(metadata map[string]interface{}, api *slack.Client, channelID, threadTs string) {
@@ -207,48 +231,50 @@ func uploadFilesFromMetadata(metadata map[string]interface{}, api *slack.Client,
 		return
 	}
 	if songPaths, exists := metadata[actions.MetadataSongs]; exists {
-		if sl, ok := songPaths.([]string); ok {
-			for _, path := range xstrings.UniqueSlice(sl) {
-				data, err := os.ReadFile(path)
-				if err != nil {
-					xlog.Error(fmt.Sprintf("Error reading song file %s: %v", path, err))
-					continue
-				}
-				filename := filepath.Base(path)
-				if filename == "" || filename == "." {
-					filename = "audio"
-				}
-				_, _ = api.UploadFileV2(slack.UploadFileV2Parameters{
-					Reader:          bytes.NewReader(data),
-					FileSize:        len(data),
-					ThreadTimestamp: threadTs,
-					Channel:         channelID,
-					Filename:        filename,
-					InitialComment:  "Generated song",
-				})
+		sl := stringSliceFromMetadata(songPaths)
+		for _, path := range xstrings.UniqueSlice(sl) {
+			data, err := os.ReadFile(path)
+			if err != nil {
+				xlog.Error(fmt.Sprintf("Error reading song file %s: %v", path, err))
+				continue
 			}
+			filename := filepath.Base(path)
+			if filename == "" || filename == "." {
+				filename = "audio"
+			}
+			_, _ = api.UploadFileV2(slack.UploadFileV2Parameters{
+				Reader:          bytes.NewReader(data),
+				FileSize:        len(data),
+				ThreadTimestamp: threadTs,
+				Channel:         channelID,
+				Filename:        filename,
+				InitialComment:  "Generated song",
+			})
 		}
 	}
 	if pdfPaths, exists := metadata[actions.MetadataPDFs]; exists {
-		if sl, ok := pdfPaths.([]string); ok {
-			for _, path := range xstrings.UniqueSlice(sl) {
-				data, err := os.ReadFile(path)
-				if err != nil {
-					xlog.Error(fmt.Sprintf("Error reading PDF file %s: %v", path, err))
-					continue
-				}
-				filename := filepath.Base(path)
-				if filename == "" || filename == "." {
-					filename = "document.pdf"
-				}
-				_, _ = api.UploadFileV2(slack.UploadFileV2Parameters{
-					Reader:          bytes.NewReader(data),
-					FileSize:        len(data),
-					ThreadTimestamp: threadTs,
-					Channel:         channelID,
-					Filename:        filename,
-					InitialComment:  "Generated PDF document",
-				})
+		sl := stringSliceFromMetadata(pdfPaths)
+		for _, path := range xstrings.UniqueSlice(sl) {
+			data, err := os.ReadFile(path)
+			if err != nil {
+				xlog.Error(fmt.Sprintf("Error reading PDF file %s: %v", path, err))
+				continue
+			}
+			filename := filepath.Base(path)
+			if filename == "" || filename == "." {
+				filename = "document.pdf"
+			}
+			xlog.Debug("Uploading PDF from metadata to Slack thread", "filename", filename, "path", path)
+			_, err = api.UploadFileV2(slack.UploadFileV2Parameters{
+				Reader:          bytes.NewReader(data),
+				FileSize:        len(data),
+				ThreadTimestamp: threadTs,
+				Channel:         channelID,
+				Filename:        filename,
+				InitialComment:  "Generated PDF document",
+			})
+			if err != nil {
+				xlog.Error("Error uploading PDF to Slack", "error", err, "path", path)
 			}
 		}
 	}
@@ -475,7 +501,7 @@ func (t *Slack) handleChannelMessage(
 
 		// Add channel and conversation_id for tracking and cancel-previous-on-new-message
 		metadata := map[string]interface{}{
-			"channel":            ev.Channel,
+			"channel":                       ev.Channel,
 			types.MetadataKeyConversationID: "slack:" + ev.Channel,
 		}
 		agentOptions = append(agentOptions, types.WithMetadata(metadata))
@@ -742,7 +768,7 @@ func (t *Slack) handleMention(
 
 		// Add channel and conversation_id for callbacks and cancel-previous-on-new-message
 		metadata := map[string]interface{}{
-			"channel":                        ev.Channel,
+			"channel":                       ev.Channel,
 			types.MetadataKeyConversationID: "slack:" + ev.Channel,
 		}
 
@@ -819,9 +845,14 @@ func (t *Slack) Start(a *agent.Agent) {
 			)
 			if err != nil {
 				xlog.Error(fmt.Sprintf("Error posting message: %v", err))
-			} else if ccm.Metadata != nil {
-				// Upload files (PDFs, songs) to the same thread so metadata is not lost
-				uploadFilesFromMetadata(ccm.Metadata, api, channelID, ts)
+			}
+			// Always upload files (PDFs, songs) when metadata is present—to the same thread if post succeeded, else to channel
+			if ccm.Metadata != nil {
+				ch, threadTs := t.channelID, ""
+				if err == nil {
+					ch, threadTs = channelID, ts
+				}
+				uploadFilesFromMetadata(ccm.Metadata, api, ch, threadTs)
 			}
 			a.SharedState().ConversationTracker.AddMessage(
 				fmt.Sprintf("slack:%s", t.channelID),
