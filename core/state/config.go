@@ -74,39 +74,42 @@ type AgentConfig struct {
 	LocalRAGAPIKey        string `json:"local_rag_api_key" form:"local_rag_api_key"`
 	LastMessageDuration   string `json:"last_message_duration" form:"last_message_duration"`
 
-	Name                     string `json:"name" form:"name"`
-	HUD                      bool   `json:"hud" form:"hud"`
-	StandaloneJob            bool   `json:"standalone_job" form:"standalone_job"`
-	RandomIdentity           bool   `json:"random_identity" form:"random_identity"`
-	InitiateConversations    bool   `json:"initiate_conversations" form:"initiate_conversations"`
-	CanPlan                  bool   `json:"enable_planning" form:"enable_planning"`
-	PlanReviewerModel        string `json:"plan_reviewer_model" form:"plan_reviewer_model"`
-	DisableSinkState         bool   `json:"disable_sink_state" form:"disable_sink_state"`
-	IdentityGuidance         string `json:"identity_guidance" form:"identity_guidance"`
-	PeriodicRuns             string `json:"periodic_runs" form:"periodic_runs"`
-	SchedulerPollInterval    string `json:"scheduler_poll_interval" form:"scheduler_poll_interval"`
-	PermanentGoal            string `json:"permanent_goal" form:"permanent_goal"`
-	EnableKnowledgeBase      bool   `json:"enable_kb" form:"enable_kb"`
-	EnableKBCompaction       bool   `json:"enable_kb_compaction" form:"enable_kb_compaction"`
-	KBCompactionInterval     string `json:"kb_compaction_interval" form:"kb_compaction_interval"`
-	KBCompactionSummarize    bool   `json:"kb_compaction_summarize" form:"kb_compaction_summarize"`
-	KBAutoSearch             bool   `json:"kb_auto_search" form:"kb_auto_search"`
-	KBAsTools                bool   `json:"kb_as_tools" form:"kb_as_tools"`
-	EnableReasoning          bool   `json:"enable_reasoning" form:"enable_reasoning"`
-	EnableForceReasoningTool bool   `json:"enable_reasoning_tool" form:"enable_reasoning_tool"`
-	EnableGuidedTools        bool   `json:"enable_guided_tools" form:"enable_guided_tools"`
-	EnableSkills             bool   `json:"enable_skills" form:"enable_skills"`
-	KnowledgeBaseResults     int    `json:"kb_results" form:"kb_results"`
-	CanStopItself            bool   `json:"can_stop_itself" form:"can_stop_itself"`
-	SystemPrompt             string `json:"system_prompt" form:"system_prompt"`
-	SkillsPrompt             string `json:"skills_prompt" form:"skills_prompt"`
-	LongTermMemory           bool   `json:"long_term_memory" form:"long_term_memory"`
-	SummaryLongTermMemory    bool   `json:"summary_long_term_memory" form:"summary_long_term_memory"`
-	ConversationStorageMode  string `json:"conversation_storage_mode" form:"conversation_storage_mode"`
-	ParallelJobs             int    `json:"parallel_jobs" form:"parallel_jobs"`
-	StripThinkingTags        bool   `json:"strip_thinking_tags" form:"strip_thinking_tags"`
-	EnableEvaluation         bool   `json:"enable_evaluation" form:"enable_evaluation"`
-	MaxEvaluationLoops       int    `json:"max_evaluation_loops" form:"max_evaluation_loops"`
+	Name                       string `json:"name" form:"name"`
+	HUD                        bool   `json:"hud" form:"hud"`
+	StandaloneJob              bool   `json:"standalone_job" form:"standalone_job"`
+	RandomIdentity             bool   `json:"random_identity" form:"random_identity"`
+	InitiateConversations      bool   `json:"initiate_conversations" form:"initiate_conversations"`
+	CanPlan                    bool   `json:"enable_planning" form:"enable_planning"`
+	PlanReviewerModel          string `json:"plan_reviewer_model" form:"plan_reviewer_model"`
+	DisableSinkState           bool   `json:"disable_sink_state" form:"disable_sink_state"`
+	IdentityGuidance           string `json:"identity_guidance" form:"identity_guidance"`
+	PeriodicRuns               string `json:"periodic_runs" form:"periodic_runs"`
+	SchedulerPollInterval      string `json:"scheduler_poll_interval" form:"scheduler_poll_interval"`
+	PermanentGoal              string `json:"permanent_goal" form:"permanent_goal"`
+	EnableKnowledgeBase        bool   `json:"enable_kb" form:"enable_kb"`
+	EnableKBCompaction         bool   `json:"enable_kb_compaction" form:"enable_kb_compaction"`
+	KBCompactionInterval       string `json:"kb_compaction_interval" form:"kb_compaction_interval"`
+	KBCompactionSummarize      bool   `json:"kb_compaction_summarize" form:"kb_compaction_summarize"`
+	KBAutoSearch               bool   `json:"kb_auto_search" form:"kb_auto_search"`
+	KBAsTools                  bool   `json:"kb_as_tools" form:"kb_as_tools"`
+	EnableReasoning            bool   `json:"enable_reasoning" form:"enable_reasoning"`
+	EnableForceReasoningTool   bool   `json:"enable_reasoning_tool" form:"enable_reasoning_tool"`
+	EnableGuidedTools          bool   `json:"enable_guided_tools" form:"enable_guided_tools"`
+	EnableSkills               bool   `json:"enable_skills" form:"enable_skills"`
+	KnowledgeBaseResults       int    `json:"kb_results" form:"kb_results"`
+	CanStopItself              bool   `json:"can_stop_itself" form:"can_stop_itself"`
+	SystemPrompt               string `json:"system_prompt" form:"system_prompt"`
+	SkillsPrompt               string `json:"skills_prompt" form:"skills_prompt"`
+	LongTermMemory             bool   `json:"long_term_memory" form:"long_term_memory"`
+	SummaryLongTermMemory      bool   `json:"summary_long_term_memory" form:"summary_long_term_memory"`
+	ConversationStorageMode    string `json:"conversation_storage_mode" form:"conversation_storage_mode"`
+	ParallelJobs               int    `json:"parallel_jobs" form:"parallel_jobs"`
+	CancelPreviousOnNewMessage *bool  `json:"cancel_previous_on_new_message" form:"cancel_previous_on_new_message"`
+	StripThinkingTags          bool   `json:"strip_thinking_tags" form:"strip_thinking_tags"`
+	EnableEvaluation           bool   `json:"enable_evaluation" form:"enable_evaluation"`
+	MaxEvaluationLoops         int    `json:"max_evaluation_loops" form:"max_evaluation_loops"`
+	MaxAttempts                int    `json:"max_attempts" form:"max_attempts"`
+	LoopDetection              int    `json:"loop_detection" form:"loop_detection"`
 }
 
 type AgentConfigMeta struct {
@@ -365,6 +368,24 @@ func NewAgentConfigMeta(
 				Tags:         config.Tags{Section: "AdvancedSettings"},
 			},
 			{
+				Name:         "cancel_previous_on_new_message",
+				Label:        "Cancel previous message on new message",
+				Type:         "checkbox",
+				DefaultValue: true,
+				HelpText:     "When a new message arrives for the same conversation, cancel the currently running job and start the new one. If disabled, new messages are queued.",
+				Tags:         config.Tags{Section: "AdvancedSettings"},
+			},
+			{
+				Name:         "loop_detection",
+				Label:        "Loop Detection",
+				Type:         "number",
+				DefaultValue: 5,
+				Min:          1,
+				Step:         1,
+				HelpText:     "Number of messages to check for loop detection. If a message is the same as the previous message, the job is cancelled.",
+				Tags:         config.Tags{Section: "AdvancedSettings"},
+			},
+			{
 				Name:         "can_stop_itself",
 				Label:        "Can Stop Itself",
 				Type:         "checkbox",
@@ -483,6 +504,16 @@ func NewAgentConfigMeta(
 				Tags:         config.Tags{Section: "AdvancedSettings"},
 			},
 			{
+				Name:         "max_attempts",
+				Label:        "Max Attempts",
+				Type:         "number",
+				DefaultValue: 1,
+				Min:          1,
+				Step:         1,
+				HelpText:     "Number of attempts on failure before surfacing the error to the user (1 = no retries)",
+				Tags:         config.Tags{Section: "AdvancedSettings"},
+			},
+			{
 				Name:         "last_message_duration",
 				Label:        "Last Message Duration",
 				Type:         "text",
@@ -526,7 +557,8 @@ func (a *AgentConfig) UnmarshalJSON(data []byte) error {
 		*Alias
 		MCPSTDIOServersConfig interface{} `json:"mcp_stdio_servers"`
 		MaxEvaluationLoops    interface{} `json:"max_evaluation_loops"`
-		ParallelJobs          interface{} `json:"parallel_jobs"`
+		MaxAttempts            interface{} `json:"max_attempts"`
+		ParallelJobs           interface{} `json:"parallel_jobs"`
 		KnowledgeBaseResults  interface{} `json:"kb_results"`
 	}{
 		Alias: (*Alias)(a),
@@ -538,8 +570,10 @@ func (a *AgentConfig) UnmarshalJSON(data []byte) error {
 
 	// Parse integer fields that may come as strings
 	a.MaxEvaluationLoops = parseIntField(aux.MaxEvaluationLoops)
+	a.MaxAttempts = parseIntField(aux.MaxAttempts)
 	a.ParallelJobs = parseIntField(aux.ParallelJobs)
 	a.KnowledgeBaseResults = parseIntField(aux.KnowledgeBaseResults)
+	a.LoopDetection = parseIntField(aux.LoopDetection)
 
 	// Handle MCP STDIO servers configuration
 	if aux.MCPSTDIOServersConfig != nil {

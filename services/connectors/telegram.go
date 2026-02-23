@@ -234,9 +234,6 @@ func (t *Telegram) handleGroupMessage(ctx context.Context, b *bot.Bot, a *agent.
 		return
 	}
 
-	// Cancel any active job for this chat before starting a new one
-	t.cancelActiveJobForChat(update.Message.Chat.ID)
-
 	// Clean up the message by removing bot mentions
 	message := strings.ReplaceAll(update.Message.Text, "@"+botInfo.Username, "")
 	update.Message.Text = strings.TrimSpace(message)
@@ -262,9 +259,10 @@ func (t *Telegram) handleGroupMessage(ctx context.Context, b *bot.Bot, a *agent.
 	t.placeholders[jobUUID] = msg.ID
 	t.placeholderMutex.Unlock()
 
-	// Add chat ID to metadata for tracking
+	// Add chat ID and conversation_id for tracking and cancel-previous-on-new-message
 	metadata := map[string]interface{}{
 		"chatID": update.Message.Chat.ID,
+		types.MetadataKeyConversationID: fmt.Sprintf("telegram:%d", update.Message.Chat.ID),
 	}
 
 	// Track if the original message was audio for TTS response
@@ -511,25 +509,6 @@ func (t *Telegram) AgentReasoningCallback() func(state types.ActionCurrentState)
 	}
 }
 
-// cancelActiveJobForChat cancels any active job for the given chat
-func (t *Telegram) cancelActiveJobForChat(chatID int64) {
-	t.activeJobsMutex.RLock()
-	ctxs, exists := t.activeJobs[chatID]
-	t.activeJobsMutex.RUnlock()
-
-	if exists {
-		xlog.Info("Cancelling active job for chat", "chatID", chatID)
-
-		// Mark the job as inactive
-		t.activeJobsMutex.Lock()
-		for _, c := range ctxs {
-			c.Cancel()
-		}
-		delete(t.activeJobs, chatID)
-		t.activeJobsMutex.Unlock()
-	}
-}
-
 // sendImageToTelegram downloads and sends an image to Telegram
 func sendImageToTelegram(ctx context.Context, b *bot.Bot, chatID int64, url string) error {
 	resp, err := http.Get(url)
@@ -744,9 +723,6 @@ func (t *Telegram) handleUpdate(ctx context.Context, b *bot.Bot, a *agent.Agent,
 		return
 	}
 
-	// Cancel any active job for this chat before starting a new one
-	t.cancelActiveJobForChat(update.Message.Chat.ID)
-
 	currentConv := a.SharedState().ConversationTracker.GetConversation(fmt.Sprintf("telegram:%d", update.Message.From.ID))
 
 	message, err := t.chatFromMessage(update)
@@ -780,9 +756,10 @@ func (t *Telegram) handleUpdate(ctx context.Context, b *bot.Bot, a *agent.Agent,
 	t.placeholders[jobUUID] = msg.ID
 	t.placeholderMutex.Unlock()
 
-	// Add chat ID to metadata for tracking
+	// Add chat ID and conversation_id for tracking and cancel-previous-on-new-message
 	metadata := map[string]interface{}{
 		"chatID": update.Message.Chat.ID,
+		types.MetadataKeyConversationID: fmt.Sprintf("telegram:%d", update.Message.Chat.ID),
 	}
 
 	// Track if the original message was audio for TTS response

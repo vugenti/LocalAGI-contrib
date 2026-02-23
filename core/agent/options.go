@@ -66,6 +66,7 @@ type options struct {
 
 	// Evaluation settings
 	maxEvaluationLoops int
+	loopDetection      int
 	enableEvaluation   bool
 
 	prompts []DynamicPrompt
@@ -88,6 +89,12 @@ type options struct {
 	parallelJobs int
 
 	lastMessageDuration time.Duration
+
+	// cancelPreviousOnNewMessage: when true (or nil), Enqueue cancels the running job for the same conversation_id. When false, jobs are queued.
+	cancelPreviousOnNewMessage *bool
+
+	// maxAttempts: on ExecuteTools failure, retry up to this many times before surfacing the error to the user (1 = no retries).
+	maxAttempts int
 }
 
 func (o *options) SeparatedMultimodalModel() bool {
@@ -97,6 +104,7 @@ func (o *options) SeparatedMultimodalModel() bool {
 func defaultOptions() *options {
 	return &options{
 		parallelJobs:            1,
+		maxAttempts:             1,
 		periodicRuns:            15 * time.Minute,
 		schedulerPollInterval:   30 * time.Second,
 		maxEvaluationLoops:      2,
@@ -197,6 +205,29 @@ func WithLastMessageDuration(duration string) Option {
 func WithParallelJobs(jobs int) Option {
 	return func(o *options) error {
 		o.parallelJobs = jobs
+		return nil
+	}
+}
+
+// WithCancelPreviousOnNewMessage sets whether a new job with the same conversation_id cancels the currently running job (true) or is queued (false). Nil/default means true.
+func WithCancelPreviousOnNewMessage(cancel bool) Option {
+	return func(o *options) error {
+		o.cancelPreviousOnNewMessage = &cancel
+		return nil
+	}
+}
+
+// WithMaxAttempts sets how many times to attempt execution on failure before surfacing the error to the user (1 = no retries).
+func WithMaxAttempts(attempts int) Option {
+	return func(o *options) error {
+		o.maxAttempts = attempts
+		return nil
+	}
+}
+
+func WithLoopDetection(loops int) Option {
+	return func(o *options) error {
+		o.loopDetection = loops
 		return nil
 	}
 }

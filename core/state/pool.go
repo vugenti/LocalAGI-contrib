@@ -584,12 +584,26 @@ func (a *AgentPool) startAgentWithConfig(name, pooldir string, config *AgentConf
 		opts = append(opts, WithParallelJobs(config.ParallelJobs))
 	}
 
+	if config.CancelPreviousOnNewMessage != nil {
+		opts = append(opts, WithCancelPreviousOnNewMessage(*config.CancelPreviousOnNewMessage))
+	} else {
+		opts = append(opts, WithCancelPreviousOnNewMessage(true))
+	}
+
 	if config.EnableEvaluation {
 		opts = append(opts, EnableEvaluation())
 	}
 
 	if config.MaxEvaluationLoops > 0 {
 		opts = append(opts, WithMaxEvaluationLoops(config.MaxEvaluationLoops))
+	}
+
+	if config.MaxAttempts > 0 {
+		opts = append(opts, WithMaxAttempts(config.MaxAttempts))
+	}
+
+	if config.LoopDetection > 0 {
+		opts = append(opts, WithLoopDetection(config.LoopDetection))
 	}
 
 	if config.EnableForceReasoningTool {

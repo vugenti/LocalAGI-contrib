@@ -75,6 +75,10 @@ type Agent struct {
 
 	// Task scheduler for managing reminders
 	taskScheduler *scheduler.Scheduler
+
+	// currentJobByConversation tracks the running job per conversation_id for cancel-previous-on-new-message
+	currentJobByConversation map[string]*types.Job
+	currentJobMu             sync.Mutex
 }
 
 type RAGDB interface {
@@ -99,16 +103,17 @@ func New(opts ...Option) (*Agent, error) {
 
 	ctx, cancel := context.WithCancel(c)
 	a := &Agent{
-		jobQueue:               make(chan *types.Job),
-		options:                options,
-		client:                 client,
-		Character:              options.character,
-		currentState:           &types.AgentInternalState{},
-		llm:                    llmClient,
-		context:                types.NewActionContext(ctx, cancel),
-		newConversations:       make(chan *types.ConversationMessage),
-		newMessagesSubscribers: options.newConversationsSubscribers,
-		sharedState:            types.NewAgentSharedState(options.lastMessageDuration),
+		jobQueue:                 make(chan *types.Job),
+		options:                  options,
+		client:                   client,
+		Character:                options.character,
+		currentState:             &types.AgentInternalState{},
+		llm:                      llmClient,
+		context:                  types.NewActionContext(ctx, cancel),
+		newConversations:         make(chan *types.ConversationMessage),
+		newMessagesSubscribers:   options.newConversationsSubscribers,
+		sharedState:              types.NewAgentSharedState(options.lastMessageDuration),
+		currentJobByConversation: make(map[string]*types.Job),
 	}
 
 	// Initialize observer if provided
@@ -271,6 +276,19 @@ func (a *Agent) Execute(j *types.Job) *types.JobResult {
 func (a *Agent) Enqueue(j *types.Job) {
 	j.ReasoningCallback = a.options.reasoningCallback
 	j.ResultCallback = a.options.resultCallback
+
+	// Cancel previous running job for this conversation if option is enabled
+	cancelPrevious := a.options.cancelPreviousOnNewMessage == nil || *a.options.cancelPreviousOnNewMessage
+	if cancelPrevious && j.Metadata != nil {
+		if convID, ok := j.Metadata[types.MetadataKeyConversationID].(string); ok && convID != "" {
+			a.currentJobMu.Lock()
+			existing := a.currentJobByConversation[convID]
+			a.currentJobMu.Unlock()
+			if existing != nil {
+				existing.Cancel()
+			}
+		}
+	}
 
 	a.jobQueue <- j
 }
@@ -807,6 +825,26 @@ func (a *Agent) consumeJob(job *types.Job, role string) {
 		return
 	}
 
+	// Register this job as the current one for its conversation (for cancel-previous-on-new-message)
+	var conversationID string
+	if job.Metadata != nil {
+		if cid, ok := job.Metadata[types.MetadataKeyConversationID].(string); ok && cid != "" {
+			conversationID = cid
+			a.currentJobMu.Lock()
+			a.currentJobByConversation[conversationID] = job
+			a.currentJobMu.Unlock()
+		}
+	}
+	if conversationID != "" {
+		defer func() {
+			a.currentJobMu.Lock()
+			if a.currentJobByConversation[conversationID] == job {
+				delete(a.currentJobByConversation, conversationID)
+			}
+			a.currentJobMu.Unlock()
+		}()
+	}
+
 	// We are self evaluating if we consume the job as a system role
 	selfEvaluation := role == SystemRole
 
@@ -1153,14 +1191,22 @@ func (a *Agent) consumeJob(job *types.Job, role string) {
 
 	if a.options.maxEvaluationLoops > 0 {
 		cogitoOpts = append(cogitoOpts,
-			cogito.WithMaxAttempts(a.options.maxEvaluationLoops),
 			cogito.WithIterations(a.options.maxEvaluationLoops),
 		)
+	}
+
+	if a.options.loopDetection > 0 {
+		cogitoOpts = append(cogitoOpts, cogito.WithLoopDetection(a.options.loopDetection))
 	}
 
 	if a.options.forceReasoningTool {
 		cogitoOpts = append(cogitoOpts,
 			cogito.WithForceReasoningTool())
+	}
+
+	if a.options.maxAttempts > 1 {
+		cogitoOpts = append(cogitoOpts, cogito.WithMaxAttempts(a.options.maxAttempts))
+		cogitoOpts = append(cogitoOpts, cogito.WithMaxRetries(a.options.maxAttempts))
 	}
 
 	fragment, err = cogito.ExecuteTools(

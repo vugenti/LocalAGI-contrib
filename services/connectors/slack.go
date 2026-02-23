@@ -144,25 +144,6 @@ func (t *Slack) AgentReasoningCallback() func(state types.ActionCurrentState) bo
 	}
 }
 
-// cancelActiveJobForChannel cancels any active job for the given channel
-func (t *Slack) cancelActiveJobForChannel(channelID string) {
-	t.activeJobsMutex.RLock()
-	ctxs, exists := t.activeJobs[channelID]
-	t.activeJobsMutex.RUnlock()
-
-	if exists {
-		xlog.Info(fmt.Sprintf("Cancelling active job for channel: %s", channelID))
-
-		// Mark the job as inactive
-		t.activeJobsMutex.Lock()
-		for _, c := range ctxs {
-			c.Cancel()
-		}
-		delete(t.activeJobs, channelID)
-		t.activeJobsMutex.Unlock()
-	}
-}
-
 func cleanUpUsernameFromMessage(message string, b *slack.AuthTestResponse) string {
 	cleaned := strings.ReplaceAll(message, "<@"+b.UserID+">", "")
 	cleaned = strings.ReplaceAll(cleaned, "<@"+b.BotID+">", "")
@@ -461,9 +442,6 @@ func (t *Slack) handleChannelMessage(
 		return
 	}
 
-	// Cancel any active job for this channel before starting a new one
-	t.cancelActiveJobForChannel(ev.Channel)
-
 	currentConv := a.SharedState().ConversationTracker.GetConversation(fmt.Sprintf("slack:%s", t.channelID))
 
 	message := replaceUserIDsWithNamesInMessage(api, cleanUpUsernameFromMessage(ev.Text, b))
@@ -492,9 +470,10 @@ func (t *Slack) handleChannelMessage(
 
 		agentOptions = append(agentOptions, types.WithConversationHistory(currentConv))
 
-		// Add channel to metadata for tracking
+		// Add channel and conversation_id for tracking and cancel-previous-on-new-message
 		metadata := map[string]interface{}{
-			"channel": ev.Channel,
+			"channel":            ev.Channel,
+			types.MetadataKeyConversationID: "slack:" + ev.Channel,
 		}
 		agentOptions = append(agentOptions, types.WithMetadata(metadata))
 
@@ -758,9 +737,10 @@ func (t *Slack) handleMention(
 			}
 		}
 
-		// Add channel to job metadata for use in callbacks
+		// Add channel and conversation_id for callbacks and cancel-previous-on-new-message
 		metadata := map[string]interface{}{
-			"channel": ev.Channel,
+			"channel":                        ev.Channel,
+			types.MetadataKeyConversationID: "slack:" + ev.Channel,
 		}
 
 		// Call the agent with the conversation history
