@@ -1090,7 +1090,7 @@ func (a *Agent) consumeJob(job *types.Job, role string) {
 					job.Result.SetResponse("decided to initiate a new conversation")
 					job.Result.Finish(nil)
 					return cogito.ToolCallDecision{
-						Approved: true,
+						Approved: false,
 					}
 				case action.StateActionName:
 					// We need to store the result in the state
