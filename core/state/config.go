@@ -112,6 +112,8 @@ type AgentConfig struct {
 	MaxEvaluationLoops         int    `json:"max_evaluation_loops" form:"max_evaluation_loops"`
 	MaxAttempts                int    `json:"max_attempts" form:"max_attempts"`
 	LoopDetection              int    `json:"loop_detection" form:"loop_detection"`
+	EnableAutoCompaction       bool   `json:"enable_auto_compaction" form:"enable_auto_compaction"`
+	AutoCompactionThreshold    int    `json:"auto_compaction_threshold" form:"auto_compaction_threshold"`
 }
 
 type AgentConfigMeta struct {
@@ -501,6 +503,24 @@ func NewAgentConfigMeta(
 				Type:         "checkbox",
 				DefaultValue: false,
 				HelpText:     "Remove content between <thinking></thinking> and <think></think> tags from agent responses",
+				Tags:         config.Tags{Section: "ModelSettings"},
+			},
+			{
+				Name:         "enable_auto_compaction",
+				Label:        "Enable Auto Compaction",
+				Type:         "checkbox",
+				DefaultValue: false,
+				HelpText:     "Enable automatic conversation compaction when token threshold is reached",
+				Tags:         config.Tags{Section: "ModelSettings"},
+			},
+			{
+				Name:         "auto_compaction_threshold",
+				Label:        "Auto Compaction Threshold (tokens)",
+				Type:         "number",
+				DefaultValue: 4096,
+				Min:          1,
+				Step:         1,
+				HelpText:     "Number of tokens to trigger automatic compaction",
 				Tags:         config.Tags{Section: "ModelSettings"},
 			},
 			{
