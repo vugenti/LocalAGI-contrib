@@ -560,27 +560,19 @@ func (a *Agent) processUserInputs(conv Messages) Messages {
 
 			// Add the text content as a new message with the same role first
 			if text != "" {
+				imageDesc := fmt.Sprintf("\n\n[Images in this message: %s]", strings.Join(imageDescriptions, "; "))
 				textMessage := openai.ChatCompletionMessage{
 					Role:    message.Role,
-					Content: text,
+					Content: text + imageDesc,
 				}
 				processedMessages = append(processedMessages, textMessage)
-
-				// Add the image descriptions as a system message after the text
-				explainerMessage := openai.ChatCompletionMessage{
-					Role: "system",
-					Content: fmt.Sprintf("The above message also contains %d image(s) which can be described as: %s",
-						len(images), strings.Join(imageDescriptions, "; ")),
-				}
-				processedMessages = append(processedMessages, explainerMessage)
 			} else {
-				// If there's no text, just add the image descriptions as a system message
-				explainerMessage := openai.ChatCompletionMessage{
-					Role: "system",
-					Content: fmt.Sprintf("Message contains %d image(s) which can be described as: %s",
-						len(images), strings.Join(imageDescriptions, "; ")),
-				}
-				processedMessages = append(processedMessages, explainerMessage)
+				// Images only: emit a single user message with the image description
+				content := fmt.Sprintf("[Attached images: %s]", strings.Join(imageDescriptions, "; "))
+				processedMessages = append(processedMessages, openai.ChatCompletionMessage{
+					Role:    message.Role,
+					Content: content,
+				})
 			}
 		} else {
 			// No image found, keep the original message
@@ -905,20 +897,22 @@ func (a *Agent) consumeJob(job *types.Job, role string) {
 	// Validate builtin tools against available actions
 	a.validateBuiltinTools(job)
 
-	fragment := cogito.NewFragment(conv...)
-
+	// Merge all leading system messages into one (self-eval, HUD, RAG, system prompt, custom prompts)
+	var selfEvalContent, hudContent string
 	if selfEvaluation {
-		fragment = fragment.AddStartMessage("system", pickSelfTemplate)
+		selfEvalContent = pickSelfTemplate
 	}
-
 	if a.options.enableHUD {
 		prompt, err := renderTemplate(hudTemplate, a.prepareHUD(), a.availableActions(job), "")
 		if err != nil {
 			job.Result.Finish(fmt.Errorf("error renderTemplate: %w", err))
 			return
 		}
-		fragment = fragment.AddStartMessage("system", prompt)
+		hudContent = prompt
 	}
+	conv = Messages(conv).mergeLeadingSystemMessages(selfEvalContent, hudContent)
+
+	fragment := cogito.NewFragment(conv...)
 
 	availableActions := a.getAvailableActionsForJob(job)
 	cogitoTools := availableActions.ToCogitoTools(job.GetContext(), a.sharedState)
